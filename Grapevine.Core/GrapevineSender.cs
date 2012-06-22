@@ -2,21 +2,22 @@
 using System.Collections.Generic;
 using System.Linq;
 using System.Text;
-using ZMQ;
+using ZeroMQ;
+using ZeroMQ.Sockets;
 
 namespace Grapevine.Core
 {
     public class GrapevineSender : IDisposable
     {
         IMessageSerializer _serializer;
-        Context _context;
-        Socket _socket;
+        IZmqContext _context;
+        ISendSocket _socket;
 
-        public GrapevineSender(Context context, string address, IMessageSerializer serializer)
+        public GrapevineSender(IZmqContext context, string address, IMessageSerializer serializer)
         {
             _serializer = serializer;
             _context = context;
-            _socket = _context.Socket(SocketType.PUSH);
+            _socket = _context.CreatePublishSocket();
             _socket.Connect(address);
         }
 
@@ -25,7 +26,7 @@ namespace Grapevine.Core
             var typeName = MessageTypeRegistry.GetTypeName(message.GetType());
             var data = _serializer.Serialize(message);
 
-            _socket.SendMore(typeName, Encoding.Unicode);
+            _socket.SendPart(Encoding.Unicode.GetBytes(typeName));
             _socket.Send(data);
         }
 

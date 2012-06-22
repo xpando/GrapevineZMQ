@@ -6,7 +6,8 @@ using System.Reactive.Subjects;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
-using ZMQ;
+using ZeroMQ;
+using ZeroMQ.Sockets;
 
 namespace Grapevine.Core
 {
@@ -14,13 +15,13 @@ namespace Grapevine.Core
     {
         HashSet<string> _topics = new HashSet<string>();
         Subject<object> _messages = new Subject<object>();
-        Context _context;
+        IZmqContext _context;
         string _address;
         IMessageSerializer _serializer;
-        Socket _socket;
+        ISubscribeSocket _socket;
         IDisposable _connection;
 
-        public GrapevineReceiver(Context context, string address, IMessageSerializer serializer)
+        public GrapevineReceiver(IZmqContext context, string address, IMessageSerializer serializer)
         {
             _context = context;
             _address = address;
@@ -33,7 +34,7 @@ namespace Grapevine.Core
             {
                 _topics.Add(topic);
                 if (_connection != null)
-                    _socket.Subscribe(topic, Encoding.Unicode);
+                    _socket.Subscribe(Encoding.Unicode.GetBytes(topic));
             }
         }
 
@@ -43,17 +44,19 @@ namespace Grapevine.Core
             {
                 _topics.Remove(topic);
                 if (_connection != null)
-                    _socket.Unsubscribe(topic, Encoding.Unicode);
+                    _socket.Unsubscribe(Encoding.Unicode.GetBytes(topic));
             }
         }
 
         public IDisposable Connect()
         {
-            _socket = _context.Socket(SocketType.SUB);
+            _socket = _context.CreateSubscribeSocket();
+            _socket.ReceiveTimeout = TimeSpan.FromSeconds(1);
             _socket.Connect(_address);
+            _socket.ReceiveReady += OnReceiveReady;
 
             foreach (var topic in _topics)
-                _socket.Subscribe(topic, Encoding.Unicode);
+                _socket.Subscribe(Encoding.Unicode.GetBytes(topic));
 
             var cancellationTokenSource = new CancellationTokenSource();
 
@@ -61,14 +64,9 @@ namespace Grapevine.Core
             (
                 () =>
                 {
-                    var pollItems = new PollItem[1];
-                    pollItems[0] = _socket.CreatePollItem(IOMultiPlex.POLLIN);
-                    pollItems[0].PollInHandler += Dispatch;
-
+                    var pollSet = _context.CreatePollSet(new [] { _socket });
                     while (!cancellationTokenSource.IsCancellationRequested)
-                        _context.Poll(pollItems, 1000000);
-
-                    pollItems[0].PollInHandler -= Dispatch;
+                        pollSet.Poll(TimeSpan.FromSeconds(1));
                 },
                 TaskCreationOptions.LongRunning
             );
@@ -83,17 +81,31 @@ namespace Grapevine.Core
                     _connection = null;
 
                     foreach (var topic in _topics)
-                        _socket.Unsubscribe(topic, Encoding.Unicode);
+                        _socket.Unsubscribe(Encoding.Unicode.GetBytes(topic));
 
                     cancellationTokenSource.Cancel();
                     task.Wait();
 
+                    _socket.ReceiveReady -= OnReceiveReady;
                     _socket.Dispose();
                     _socket = null;
                 }
             );
 
             return _connection;
+        }
+
+        void OnReceiveReady(object sender, ReceiveReadyEventArgs e)
+        {
+            var typeName = Encoding.Unicode.GetString(e.Socket.Receive());
+            var data = e.Socket.Receive();
+
+            var type = MessageTypeRegistry.Resolve(typeName);
+            if (type != null)
+            {
+                var message = _serializer.Deserialize(data, type);
+                _messages.OnNext(message);
+            }
         }
 
         public IDisposable Subscribe(IObserver<object> observer)
@@ -105,19 +117,6 @@ namespace Grapevine.Core
         {
             if (_connection != null)
                 _connection.Dispose();
-        }
-
-        void Dispatch(Socket socket, IOMultiPlex revents)
-        {
-            var typeName = socket.Recv(Encoding.Unicode);
-            var data = socket.Recv();
-
-            var type = MessageTypeRegistry.Resolve(typeName);
-            if (type != null)
-            {
-                var message = _serializer.Deserialize(data, type);
-                _messages.OnNext(message);
-            }
         }
     }
 }

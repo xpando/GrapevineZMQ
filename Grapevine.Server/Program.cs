@@ -1,6 +1,8 @@
 ﻿using System;
 using Grapevine.Core;
-using ZMQ;
+using ZeroMQ;
+using ZeroMQ.Sockets;
+using ZeroMQ.Sockets.Devices;
 
 namespace Grapevine.Server
 {
@@ -10,15 +12,18 @@ namespace Grapevine.Server
         {
             // TODO: turn this into a TopShelf service.
 
-            using (var context = new Context())
+            using (var context = ZmqContext.Create())
+            using (var forwarder = ForwarderDevice.CreateThreaded(context))
             {
-                var hub = new Forwarder(context, "tcp://*:5559", "tcp://*:5560");
+                forwarder.ConfigureFrontend().BindTo("tcp://*:5560").SubscribeToAll();
+                forwarder.ConfigureBackend().BindTo("tcp://*:5559");
 
                 Console.WriteLine("Starting server...");
-                hub.Start();
+                forwarder.Start();
+
                 Console.WriteLine("Server started. Press any key to exit.");
                 Console.ReadKey();
-                hub.Stop();
+                forwarder.Stop();
             }
         }
     }

@@ -10,7 +10,8 @@ using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using Grapevine.Core;
-using ZMQ;
+using ZeroMQ;
+using ZeroMQ.Sockets;
 
 namespace Grapevine.Client
 {
@@ -55,7 +56,7 @@ namespace Grapevine.Client
     public sealed class GrapevineClient : IGrapevineClient, IDisposable
     {
         IMessageSerializer _serializer = new ProtobufMessageSerializer();
-        Context _context = new Context();
+        IZmqContext _context = ZmqContext.Create();
         GrapevineSender _sender;
         GrapevineReceiver _receiver;
 
