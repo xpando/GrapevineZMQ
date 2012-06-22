@@ -6,6 +6,7 @@ using System.Text;
 using System.Reactive.Linq;
 using System.Reactive.Concurrency;
 using Grapevine.Client;
+using System.Diagnostics;
 
 namespace GrapevineBreaker
 {
@@ -19,7 +20,7 @@ namespace GrapevineBreaker
     {
         static void Main(string[] args)
         {
-            int numClients = 1;
+            int numClients = 10;
             int nn = numClients * 100;
             long expectedTotal = nn * (nn + 1) / 2;
 
@@ -41,7 +42,7 @@ namespace GrapevineBreaker
 
 
 
-            var clients = Enumerable.Range(1, numClients).Select(_ => new GrapevineClient("tcp://localhost:5560", "tcp://localhost:5559") as IGrapevineClient);
+            var clients = Enumerable.Range(1, numClients).Select(_ => subClient as IGrapevineClient);
             var numbers = Enumerable.Range(1, 100 * numClients).Chunk(100);
 
             var clientsAndNumbers = clients.Zip(numbers, (c, n) => new { Client = c, Numbers = n.ToObservable() });
@@ -71,7 +72,7 @@ namespace GrapevineBreaker
                         return
                             n;
                     },
-                Scheduler.TaskPool));
+                Scheduler.TaskPool).Delay(TimeSpan.FromMilliseconds(1)));
                 }, Scheduler.TaskPool))
                 .Merge(numClients)
                 .Select(n => n.ToString());
@@ -79,8 +80,14 @@ namespace GrapevineBreaker
 
 
             var mObs = sObs.Merge(rObs)
-
-                .Subscribe(s => Console.WriteLine(s), ex => Console.WriteLine(ex.ToString()));
+                .Subscribe(s =>
+                {
+                    Trace.WriteLine(s);
+                    //Console.WriteLine(s);
+                }, ex => {
+                    Trace.WriteLine(ex);
+                    //Console.WriteLine(ex.ToString())
+                });
 
 
 

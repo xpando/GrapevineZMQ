@@ -3,6 +3,7 @@ using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq.Expressions;
+using System.Reactive.Concurrency;
 using System.Reactive.Disposables;
 using System.Reactive.Linq;
 using System.Reactive.Subjects;
@@ -76,7 +77,7 @@ namespace Grapevine.Client
             MessageTypeRegistry.Register<MessageType>();
             var typeName = MessageTypeRegistry.GetTypeName(typeof(MessageType));
             _receiver.AddTopic(typeName);
-            return _receiver.OfType<MessageType>();
+            return _receiver.OfType<MessageType>();//.SubscribeOn(Scheduler.TaskPool);
         }
 
         public IObservable<MessageType> Receive<MessageType>(Expression<Func<MessageType,bool>> filter)
