@@ -9,6 +9,7 @@ using System.Reactive.Subjects;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
+using Grapevine.Core;
 using ZMQ;
 
 namespace Grapevine.Client
@@ -51,136 +52,31 @@ namespace Grapevine.Client
         IObservable<MessageType> Receive<MessageType>(Expression<Func<MessageType,bool>> filter);
     }
 
-    public sealed class ObservableDispatcher : IConnectableObservable<object>, IDisposable
-    {
-        HashSet<string> _topics = new HashSet<string>();
-        Subject<object> _messages = new Subject<object>();
-        Context _context;
-        string _address;
-        Socket _socket;
-        IDisposable _connection;
-
-        public ObservableDispatcher(Context context, string address)
-        {
-            _context = context;
-            _address = address;
-        }
-
-        public void AddTopic(string topic)
-        {
-            if (!_topics.Contains(topic))
-            {
-                _topics.Add(topic);
-                if (_connection != null)
-                    _socket.Subscribe(topic, Encoding.Unicode);
-            }
-        }
-
-        public void RemoveTopic(string topic)
-        {
-            if (_topics.Contains(topic))
-            {
-                _topics.Remove(topic);
-                if (_connection != null)
-                    _socket.Unsubscribe(topic, Encoding.Unicode);
-            }
-        }
-
-        public IDisposable Connect()
-        {
-            _socket = _context.Socket(SocketType.SUB);
-            _socket.Connect(_address);
-
-            foreach (var topic in _topics)
-                _socket.Subscribe(topic, Encoding.Unicode);
-
-            var cancellationTokenSource = new CancellationTokenSource();
-
-            var task = Task.Factory.StartNew
-            (
-                () =>
-                {
-                    var pollItems = new PollItem[1];
-                    pollItems[0] = _socket.CreatePollItem(IOMultiPlex.POLLIN);
-                    pollItems[0].PollInHandler += Dispatch;
-
-                    while (!cancellationTokenSource.IsCancellationRequested)
-                        _context.Poll(pollItems, 1000000);
-
-                    pollItems[0].PollInHandler -= Dispatch;
-                },
-                TaskCreationOptions.LongRunning
-            );
-
-            if (_connection != null)
-                _connection.Dispose();
-
-            _connection = Disposable.Create
-            (
-                () =>
-                {
-                    _connection = null;
-
-                    foreach (var topic in _topics)
-                        _socket.Unsubscribe(topic, Encoding.Unicode);
-
-                    cancellationTokenSource.Cancel();
-                    task.Wait();
-
-                    _socket.Dispose();
-                    _socket = null;
-                }
-            );
-
-            return _connection;
-        }
-
-        public IDisposable Subscribe(IObserver<object> observer)
-        {
-            return _messages.Subscribe(observer);
-        }
-
-        public void Dispose()
-        {
-            if (_connection != null)
-                _connection.Dispose();
-        }
-
-        void Dispatch(Socket socket, IOMultiPlex revents)
-        {
-            var message = _socket.RecvProtoBuf();
-            if (message != null)
-                _messages.OnNext(message);
-        }
-    }
-
     public sealed class GrapevineClient : IGrapevineClient, IDisposable
     {
-        readonly Context _context = new Context();
-
-        Socket _pubSocket;
-        ObservableDispatcher _messages;
+        IMessageSerializer _serializer = new ProtobufMessageSerializer();
+        Context _context = new Context();
+        GrapevineSender _sender;
+        GrapevineReceiver _receiver;
 
         public GrapevineClient(string pubAddress, string subAddress)
         {
-            _pubSocket = _context.Socket(SocketType.PUSH);
-            _pubSocket.Connect(pubAddress);
-
-            _messages = new ObservableDispatcher(_context, subAddress);
-            _messages.Connect();
+            _sender = new GrapevineSender(_context, pubAddress, _serializer);
+            _receiver = new GrapevineReceiver(_context, subAddress, _serializer);
+            _receiver.Connect();
         }
 
         void IGrapevineClient.Send<MessageType>(MessageType message)
         {
-            _pubSocket.SendProtoBuf<MessageType>(message);
+            _sender.Send(message);
         }
 
         public IObservable<MessageType> Receive<MessageType>()
         {
             MessageTypeRegistry.Register<MessageType>();
             var typeName = MessageTypeRegistry.GetTypeName(typeof(MessageType));
-            _messages.AddTopic(typeName);
-            return _messages.OfType<MessageType>();
+            _receiver.AddTopic(typeName);
+            return _receiver.OfType<MessageType>();
         }
 
         public IObservable<MessageType> Receive<MessageType>(Expression<Func<MessageType,bool>> filter)
@@ -190,8 +86,8 @@ namespace Grapevine.Client
 
         public void Dispose()
         {
-            _messages.Dispose();
-            _pubSocket.Dispose();
+            _sender.Dispose();
+            _receiver.Dispose();
  	        _context.Dispose();
         }
     }
