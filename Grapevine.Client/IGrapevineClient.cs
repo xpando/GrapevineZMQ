@@ -1,7 +1,12 @@
 ﻿using System;
+using System.Collections.Concurrent;
+using System.Collections.Generic;
+using System.IO;
 using System.Linq.Expressions;
+using System.Reactive.Disposables;
 using System.Reactive.Linq;
 using System.Reactive.Subjects;
+using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using ZMQ;
@@ -46,57 +51,106 @@ namespace Grapevine.Client
         IObservable<MessageType> Receive<MessageType>(Expression<Func<MessageType,bool>> filter);
     }
 
-    public sealed class ObservableSocket<T> : IConnectableObservable<T>, IDisposable
+    public sealed class ObservableDispatcher : IConnectableObservable<object>, IDisposable
     {
-        readonly Context _context;
-        readonly string _address;
-        readonly SocketType _socketType;
-        readonly Subject<T> _messages = new Subject<T>();
-        CancellationTokenSource _cancellationTokenSource;
-        Task _task;
+        HashSet<string> _topics = new HashSet<string>();
+        Subject<object> _messages = new Subject<object>();
+        Context _context;
+        string _address;
         Socket _socket;
+        IDisposable _connection;
 
-        public ObservableSocket(Context context, SocketType socketType, string address)
+        public ObservableDispatcher(Context context, string address)
         {
-            _context    = context;
-            _address    = address;
-            _socketType = socketType;
+            _context = context;
+            _address = address;
+        }
+
+        public void AddTopic(string topic)
+        {
+            if (!_topics.Contains(topic))
+            {
+                _topics.Add(topic);
+                if (_connection != null)
+                    _socket.Subscribe(topic, Encoding.Unicode);
+            }
+        }
+
+        public void RemoveTopic(string topic)
+        {
+            if (_topics.Contains(topic))
+            {
+                _topics.Remove(topic);
+                if (_connection != null)
+                    _socket.Unsubscribe(topic, Encoding.Unicode);
+            }
         }
 
         public IDisposable Connect()
         {
-            _socket = _context.Socket(_socketType);
+            _socket = _context.Socket(SocketType.SUB);
             _socket.Connect(_address);
 
-            _cancellationTokenSource = new CancellationTokenSource();
+            foreach (var topic in _topics)
+                _socket.Subscribe(topic, Encoding.Unicode);
 
-            _task = Task.Factory.StartNew
+            var cancellationTokenSource = new CancellationTokenSource();
+
+            var task = Task.Factory.StartNew
             (
                 () =>
                 {
-                    while (!_cancellationTokenSource.IsCancellationRequested)
-                    {
-                        var message = _socket.RecvProtoBuf();
-                        if (message is T)
-                            _messages.OnNext((T)message);
-                    }
+                    var pollItems = new PollItem[1];
+                    pollItems[0] = _socket.CreatePollItem(IOMultiPlex.POLLIN);
+                    pollItems[0].PollInHandler += Dispatch;
+
+                    while (!cancellationTokenSource.IsCancellationRequested)
+                        _context.Poll(pollItems, 1000000);
+
+                    pollItems[0].PollInHandler -= Dispatch;
                 },
                 TaskCreationOptions.LongRunning
             );
 
-            return this;
+            if (_connection != null)
+                _connection.Dispose();
+
+            _connection = Disposable.Create
+            (
+                () =>
+                {
+                    _connection = null;
+
+                    foreach (var topic in _topics)
+                        _socket.Unsubscribe(topic, Encoding.Unicode);
+
+                    cancellationTokenSource.Cancel();
+                    task.Wait();
+
+                    _socket.Dispose();
+                    _socket = null;
+                }
+            );
+
+            return _connection;
         }
 
-        public IDisposable Subscribe(IObserver<T> observer)
+        public IDisposable Subscribe(IObserver<object> observer)
         {
             return _messages.Subscribe(observer);
         }
 
         public void Dispose()
         {
-            _cancellationTokenSource.Cancel();
-            _task.Wait();
-            _socket.Dispose();
+            if (_connection != null)
+                _connection.Dispose();
+        }
+
+        void Dispatch(Socket socket, IOMultiPlex revents)
+        {
+            var message = _socket.RecvProtoBuf();
+            if (message != null)
+                _messages.OnNext(message);
         }
     }
 
@@ -105,14 +159,14 @@ namespace Grapevine.Client
         readonly Context _context = new Context();
 
         Socket _pubSocket;
-        ObservableSocket<object> _messages;
+        ObservableDispatcher _messages;
 
         public GrapevineClient(string pubAddress, string subAddress)
         {
             _pubSocket = _context.Socket(SocketType.PUSH);
             _pubSocket.Connect(pubAddress);
 
-            _messages = new ObservableSocket<object>(_context, SocketType.SUB, subAddress);
+            _messages = new ObservableDispatcher(_context, subAddress);
             _messages.Connect();
         }
 
@@ -121,20 +175,22 @@ namespace Grapevine.Client
             _pubSocket.SendProtoBuf<MessageType>(message);
         }
 
-        IObservable<MessageType> IGrapevineClient.Receive<MessageType>()
+        public IObservable<MessageType> Receive<MessageType>()
         {
+            MessageTypeRegistry.Register<MessageType>();
+            var typeName = MessageTypeRegistry.GetTypeName(typeof(MessageType));
+            _messages.AddTopic(typeName);
             return _messages.OfType<MessageType>();
         }
 
-        IObservable<MessageType> IGrapevineClient.Receive<MessageType>(Expression<Func<MessageType,bool>> filter)
+        public IObservable<MessageType> Receive<MessageType>(Expression<Func<MessageType,bool>> filter)
         {
-            return _messages
-                .OfType<MessageType>()
-                .Where(filter.Compile());
+            return Receive<MessageType>().Where(filter.Compile());
         }
 
         public void Dispose()
         {
+            _messages.Dispose();
             _pubSocket.Dispose();
  	        _context.Dispose();
         }

@@ -12,31 +12,12 @@ namespace Grapevine.Client
 {
     public static class MessageTypeRegistry
     {
-        public static readonly ConcurrentDictionary<string, Type> MessageTypes = new ConcurrentDictionary<string, Type>();
+        static readonly ConcurrentDictionary<string, Type> _messageTypes = new ConcurrentDictionary<string, Type>();
+        static ConcurrentDictionary<Type, string> _typeNameCache = new ConcurrentDictionary<Type, string>();
 
-        public static void Register<T>()
+        public static string GetTypeName(Type messageType)
         {
-            var messageType = typeof(T);
-
-            var dataContract = messageType.GetCustomAttributes(typeof(DataContractAttribute), false).FirstOrDefault() as DataContractAttribute;
-            if (dataContract == null)
-                throw new InvalidOperationException(string.Format("Missing [DataContract] attribute on message type '{0}'.", messageType.FullName));
-
-            var name = dataContract.Name;
-            if (string.IsNullOrWhiteSpace(name))
-                name = messageType.FullName;
-
-            MessageTypes.TryAdd(name, messageType);
-        }
-    }
-
-    public static class ExtendSocket
-    {
-        static ConcurrentDictionary<Type, string> _typeCache = new ConcurrentDictionary<Type, string>();
-
-        static string GetTypeName(Type messageType)
-        {
-            return _typeCache.GetOrAdd
+            return _typeNameCache.GetOrAdd
             (
                 messageType,
                 _ =>
@@ -54,11 +35,37 @@ namespace Grapevine.Client
             );
         }
 
+        public static Type Resolve(string typeName)
+        {
+            if (_messageTypes.ContainsKey(typeName))
+                return _messageTypes[typeName];
+
+            return null;
+        }
+
+        public static void Register<T>()
+        {
+            var messageType = typeof(T);
+
+            var dataContract = messageType.GetCustomAttributes(typeof(DataContractAttribute), false).FirstOrDefault() as DataContractAttribute;
+            if (dataContract == null)
+                throw new InvalidOperationException(string.Format("Missing [DataContract] attribute on message type '{0}'.", messageType.FullName));
+
+            var name = dataContract.Name;
+            if (string.IsNullOrWhiteSpace(name))
+                name = messageType.FullName;
+
+            _messageTypes.TryAdd(name, messageType);
+        }
+    }
+
+    public static class ExtendSocket
+    {
         public static void SendProtoBuf<T>(this Socket socket, T message)
         {
-            var messageType = GetTypeName(typeof(T));
+            var typeName = MessageTypeRegistry.GetTypeName(typeof(T));
 
-            socket.SendMore(messageType, Encoding.UTF8);
+            socket.SendMore(typeName, Encoding.Unicode);
 
             using (var ms = new MemoryStream())
             {
@@ -70,28 +77,32 @@ namespace Grapevine.Client
     
         public static object RecvProtoBuf(this Socket socket)
         {
-            // read the type name as frame 1
-            var typeName = socket.Recv(Encoding.UTF8);
-            var type     = MessageTypeRegistry.MessageTypes[typeName];
+            var typeName = socket.Recv(Encoding.Unicode);
+            var data = socket.Recv();
 
-            // ready message data as frame 2
-            using (var ms = new MemoryStream(socket.Recv()))
-            using (var r = new StreamReader(ms, Encoding.Unicode))
+            var type = MessageTypeRegistry.Resolve(typeName);
+            if (type != null)
             {
-                return Serializer.NonGeneric.Deserialize(type, ms);
+                using (var ms = new MemoryStream(data))
+                using (var r = new StreamReader(ms))
+                {
+                    return Serializer.NonGeneric.Deserialize(type, ms);
+                }
             }
+
+            return null;
         }
 
         public static object RecvJson(this Socket socket)
         {
-            // read the type name as frame 1
-            var typeName = socket.Recv(Encoding.UTF8, SendRecvOpt.SNDMORE);
-            var type     = MessageTypeRegistry.MessageTypes[typeName];
+            var typeName = socket.Recv(Encoding.Unicode);
+            var json = socket.Recv(Encoding.Unicode);
 
-            var json    = socket.Recv(Encoding.UTF8);
-            var message = JsonConvert.DeserializeObject(json, type);
+            var type = MessageTypeRegistry.Resolve(typeName);
+            if (type != null)
+                return JsonConvert.DeserializeObject(json, type);
 
-            return message;
+            return null;
         }
     }
 }

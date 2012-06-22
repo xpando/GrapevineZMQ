@@ -49,9 +49,7 @@ namespace Grapevine.Core
                 () =>
                 {
                     while (!_tokenSource.IsCancellationRequested)
-                    {
                         _context.Poll(pollItems, 1000000);
-                    }
                 }, 
                 TaskCreationOptions.LongRunning
             );
@@ -73,12 +71,12 @@ namespace Grapevine.Core
 
         void Forward(Socket socket, IOMultiPlex revents)
         {
-            var typeName = socket.Recv(Encoding.UTF8);
+            var typeName = socket.Recv(Encoding.Unicode);
             var data = socket.Recv();
 
-            //_logger.Info("Forwarding:\r\n\tType: {0}\r\n\tMessage: {1}", typeName, data);
+            _logger.Info("Publishing message: {0}", typeName);
 
-            _pubSocket.Send(typeName, Encoding.UTF8, SendRecvOpt.SNDMORE);
+            _pubSocket.SendMore(typeName, Encoding.Unicode);
             _pubSocket.Send(data);
         }
     }

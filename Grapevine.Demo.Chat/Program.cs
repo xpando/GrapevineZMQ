@@ -21,7 +21,7 @@ namespace Grapevine.Demo.Chat
     {
         static void Main(string[] args)
         {
-            MessageTypeRegistry.Register<ChatRoomMessage>();
+            //MessageTypeRegistry.Register<ChatRoomMessage>();
 
             Console.Write("Enter user name: ");
             var userName = Console.ReadLine();
