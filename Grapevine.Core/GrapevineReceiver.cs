@@ -1,122 +1,138 @@
 ﻿using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Linq;
+using System.Reactive.Concurrency;
 using System.Reactive.Disposables;
+using System.Reactive.Linq;
 using System.Reactive.Subjects;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
+using NLog;
 using ZeroMQ;
 using ZeroMQ.Sockets;
 
 namespace Grapevine.Core
 {
-    public sealed class GrapevineReceiver : IConnectableObservable<object>, IDisposable
+    public interface IGrapevineReceiver
     {
-        HashSet<string> _topics = new HashSet<string>();
-        Subject<object> _messages = new Subject<object>();
-        IZmqContext _context;
-        string _address;
-        IMessageSerializer _serializer;
-        ISubscribeSocket _socket;
-        IDisposable _connection;
+        void AddTopic(string topic);
+        void RemoveTopic(string topic);
 
-        public GrapevineReceiver(IZmqContext context, string address, IMessageSerializer serializer)
-        {
+        IObservable<object> Messages { get; }
+    }
+
+    public interface IGrapevineReceiverFactory
+    {
+        IGrapevineReceiver Create(string address);
+    }
+
+    public sealed class GrapevineReceiverFactory : IGrapevineReceiverFactory
+    {
+        IZmqContext _context;
+        IMessageSerializer _serializer;
+        ConcurrentDictionary<string, IGrapevineReceiver> _receivers = new ConcurrentDictionary<string, IGrapevineReceiver>();
+
+        public GrapevineReceiverFactory(IZmqContext context, IMessageSerializer serializer)
+	    {
             _context = context;
-            _address = address;
             _serializer = serializer;
+	    }
+
+        public IGrapevineReceiver Create(string address)
+        {
+            var receiver = _receivers.GetOrAdd(address.Trim().ToLower(), new GrapevineReceiver(address, _context, _serializer));
+            return receiver;
+        }
+    }
+
+    public sealed class GrapevineReceiver : IGrapevineReceiver
+    {
+        static readonly Logger _logger = LogManager.GetCurrentClassLogger();
+
+        IObservable<object> _messages;
+        static Subject<string> _addTopics = new Subject<string>();
+        static Subject<string> _removeTopics = new Subject<string>();
+
+        internal GrapevineReceiver(string address, IZmqContext context, IMessageSerializer serializer)
+        {
+            _messages = Observable
+                .Defer // wait until first subscriber to create a conection to the server
+                (
+                    () => Observable.Create<object>
+                    (
+                        observer =>
+                        {
+                            var cancel = new CancellationDisposable();
+
+                            // use a background thread to read and dispatch incoming messages
+                            Scheduler.NewThread.Schedule
+                            (
+                                () => DispatchMessages(context, address, serializer, observer, cancel.Token)
+                            );
+
+                            return cancel;
+                        }
+                    )
+                )
+                .Publish()    // make this observable connectable
+                .RefCount();  // auto connect/dispose on first/last subscriber
         }
 
         public void AddTopic(string topic)
         {
-            if (!_topics.Contains(topic))
-            {
-                _topics.Add(topic);
-                if (_connection != null)
-                    _socket.Subscribe(Encoding.Unicode.GetBytes(topic));
-            }
+            _addTopics.OnNext(topic);
         }
 
         public void RemoveTopic(string topic)
         {
-            if (_topics.Contains(topic))
-            {
-                _topics.Remove(topic);
-                if (_connection != null)
-                    _socket.Unsubscribe(Encoding.Unicode.GetBytes(topic));
-            }
+            _removeTopics.OnNext(topic);
         }
 
-        public IDisposable Connect()
+        public IObservable<object> Messages { get { return _messages; } }
+
+        static void DispatchMessages(IZmqContext context, string address, IMessageSerializer serializer, IObserver<object> observer, CancellationToken token)
         {
-            _socket = _context.CreateSubscribeSocket();
-            _socket.ReceiveTimeout = TimeSpan.FromSeconds(1);
-            _socket.Connect(_address);
-            _socket.ReceiveReady += OnReceiveReady;
-
-            foreach (var topic in _topics)
-                _socket.Subscribe(Encoding.Unicode.GetBytes(topic));
-
-            var cancellationTokenSource = new CancellationTokenSource();
-
-            var task = Task.Factory.StartNew
-            (
-                () =>
+            try
+            {
+                using (var socket = context.CreateSubscribeSocket())
                 {
-                    var pollSet = _context.CreatePollSet(new [] { _socket });
-                    while (!cancellationTokenSource.IsCancellationRequested)
-                        pollSet.Poll(TimeSpan.FromSeconds(1));
-                },
-                TaskCreationOptions.LongRunning
-            );
+                    socket.Connect(address);
 
-            if (_connection != null)
-                _connection.Dispose();
+                    socket.SubscribeAll();
+                    // TODO: socket.Subscribe(Encoding.Unicode.GetBytes(topic));
+                    // TODO: socket.Unsubscribe(Encoding.Unicode.GetBytes(topic));
 
-            _connection = Disposable.Create
-            (
-                () =>
-                {
-                    _connection = null;
+                    EventHandler<ReceiveReadyEventArgs> dispatchMessage = (s,a) =>
+                    {
+                        var typeName = Encoding.Unicode.GetString(socket.Receive());
+                        var data = socket.Receive();
 
-                    foreach (var topic in _topics)
-                        _socket.Unsubscribe(Encoding.Unicode.GetBytes(topic));
+                        var type = MessageTypeRegistry.Resolve(typeName);
+                        if (type != null)
+                        {
+                            var message = serializer.Deserialize(data, type);
+                            observer.OnNext(message);
+                        }
+                    };
 
-                    cancellationTokenSource.Cancel();
-                    task.Wait();
+                    socket.ReceiveReady += dispatchMessage;
 
-                    _socket.ReceiveReady -= OnReceiveReady;
-                    _socket.Dispose();
-                    _socket = null;
+                    var poller = context.CreatePollSet(new [] { socket });
+                    while (!token.IsCancellationRequested)
+                        poller.Poll(TimeSpan.FromSeconds(1));
+
+                    socket.ReceiveReady -= dispatchMessage;
+
+                    observer.OnCompleted();
                 }
-            );
-
-            return _connection;
-        }
-
-        void OnReceiveReady(object sender, ReceiveReadyEventArgs e)
-        {
-            var typeName = Encoding.Unicode.GetString(e.Socket.Receive());
-            var data = e.Socket.Receive();
-
-            var type = MessageTypeRegistry.Resolve(typeName);
-            if (type != null)
-            {
-                var message = _serializer.Deserialize(data, type);
-                _messages.OnNext(message);
             }
-        }
-
-        public IDisposable Subscribe(IObserver<object> observer)
-        {
-            return _messages.Subscribe(observer);
-        }
-
-        public void Dispose()
-        {
-            if (_connection != null)
-                _connection.Dispose();
+            catch (Exception ex)
+            {
+                _logger.Error(ex);
+                observer.OnError(ex);
+            }
         }
     }
 }

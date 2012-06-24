@@ -1,4 +1,5 @@
 ﻿using System;
+using System.Threading;
 using Grapevine.Core;
 using ZeroMQ;
 using ZeroMQ.Sockets;
@@ -22,7 +23,9 @@ namespace Grapevine.Server
                 forwarder.Start();
 
                 Console.WriteLine("Server started. Press any key to exit.");
-                Console.ReadKey();
+                while (!Console.KeyAvailable)
+                    Thread.Yield();
+
                 forwarder.Stop();
             }
         }

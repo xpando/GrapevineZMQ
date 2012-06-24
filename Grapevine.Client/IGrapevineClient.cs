@@ -58,13 +58,14 @@ namespace Grapevine.Client
         IMessageSerializer _serializer = new ProtobufMessageSerializer();
         IZmqContext _context = ZmqContext.Create();
         GrapevineSender _sender;
-        GrapevineReceiver _receiver;
+        IGrapevineReceiver _receiver;
 
         public GrapevineClient(string pubAddress, string subAddress)
         {
+            var receiverFactory = new GrapevineReceiverFactory(_context, _serializer);
+
             _sender = new GrapevineSender(_context, pubAddress, _serializer);
-            _receiver = new GrapevineReceiver(_context, subAddress, _serializer);
-            _receiver.Connect();
+            _receiver = receiverFactory.Create(subAddress);
         }
 
         void IGrapevineClient.Send<MessageType>(MessageType message)
@@ -77,7 +78,7 @@ namespace Grapevine.Client
             MessageTypeRegistry.Register<MessageType>();
             var typeName = MessageTypeRegistry.GetTypeName(typeof(MessageType));
             _receiver.AddTopic(typeName);
-            return _receiver.OfType<MessageType>();
+            return _receiver.Messages.OfType<MessageType>();
         }
 
         public IObservable<MessageType> Receive<MessageType>(Expression<Func<MessageType,bool>> filter)
@@ -88,7 +89,6 @@ namespace Grapevine.Client
         public void Dispose()
         {
             _sender.Dispose();
-            _receiver.Dispose();
  	        _context.Dispose();
         }
     }
