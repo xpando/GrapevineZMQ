@@ -35,7 +35,7 @@ namespace Grapevine.Demo.Chat
 
             Console.WriteLine("Connecting to chat server...");
             
-            client
+            var sub = client
                 .Receive<ChatRoomMessage>
                 (
                     message => 
@@ -60,6 +60,8 @@ namespace Grapevine.Demo.Chat
                 if (!done)
                     client.Send(new ChatRoomMessage { Room = room, From = userName, Message = input });
             };
+
+            sub.Dispose();
         }
     }
 }
