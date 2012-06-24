@@ -7,6 +7,7 @@ using System.Reactive.Linq;
 using System.Reactive.Concurrency;
 using Grapevine.Client;
 using System.Diagnostics;
+using System.Threading;
 
 namespace GrapevineBreaker
 {
@@ -20,7 +21,7 @@ namespace GrapevineBreaker
     {
         static void Main(string[] args)
         {
-            int numClients = 10;
+            int numClients = 100;
             int nn = numClients * 100;
             long expectedTotal = nn * (nn + 1) / 2;
 
@@ -76,17 +77,14 @@ namespace GrapevineBreaker
                 }, Scheduler.TaskPool))
                 .Merge(numClients)
                 .Select(n => n.ToString());
-            //.Subscribe(Console.WriteLine, ex => Console.WriteLine(ex.ToString()), () => Console.WriteLine("FIN!"));
 
 
             var mObs = sObs.Merge(rObs)
                 .Subscribe(s =>
                 {
-                    Trace.WriteLine(s);
-                    //Console.WriteLine(s);
+                    Console.WriteLine(s);
                 }, ex => {
-                    Trace.WriteLine(ex);
-                    //Console.WriteLine(ex.ToString())
+                    Console.WriteLine(ex.ToString());
                 });
 
 
@@ -94,6 +92,19 @@ namespace GrapevineBreaker
 
 
 
+            WaitForKey();
+
+            mObs.Dispose();
+
+            WaitForKey();
+        }
+
+        public static void WaitForKey()
+        {
+            while (!Console.KeyAvailable)
+            {
+                Thread.Yield();
+            }
             Console.ReadKey();
         }
     }
