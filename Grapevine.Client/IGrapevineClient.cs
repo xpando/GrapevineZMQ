@@ -64,7 +64,6 @@ namespace Grapevine.Client
         {
             _sender = new GrapevineSender(_context, pubAddress, _serializer);
             _receiver = new GrapevineReceiver(_context, subAddress, _serializer);
-            _receiver.Connect();
         }
 
         void IGrapevineClient.Send<MessageType>(MessageType message)
@@ -77,7 +76,7 @@ namespace Grapevine.Client
             MessageTypeRegistry.Register<MessageType>();
             var typeName = MessageTypeRegistry.GetTypeName(typeof(MessageType));
             _receiver.AddTopic(typeName);
-            return _receiver.OfType<MessageType>();//.SubscribeOn(Scheduler.TaskPool);
+            return _receiver.Receive().OfType<MessageType>();//.SubscribeOn(Scheduler.TaskPool);
         }
 
         public IObservable<MessageType> Receive<MessageType>(Expression<Func<MessageType,bool>> filter)
@@ -88,7 +87,6 @@ namespace Grapevine.Client
         public void Dispose()
         {
             _sender.Dispose();
-            _receiver.Dispose();
  	        _context.Dispose();
         }
     }

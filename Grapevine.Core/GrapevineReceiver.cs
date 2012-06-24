@@ -1,7 +1,9 @@
 ﻿using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Reactive.Concurrency;
 using System.Reactive.Disposables;
+using System.Reactive.Linq;
 using System.Reactive.Subjects;
 using System.Text;
 using System.Threading;
@@ -10,15 +12,16 @@ using ZMQ;
 
 namespace Grapevine.Core
 {
-    public sealed class GrapevineReceiver : IConnectableObservable<object>, IDisposable
+    public sealed class GrapevineReceiver
     {
         HashSet<string> _topics = new HashSet<string>();
-        Subject<object> _messages = new Subject<object>();
         Context _context;
         string _address;
         IMessageSerializer _serializer;
-        Socket _socket;
         IDisposable _connection;
+        IObservable<object> _pipe = null;
+        Action<string, Encoding> _addTopicHandler = null;
+        Action<string, Encoding> _removeTopicHandler = null;
 
         public GrapevineReceiver(Context context, string address, IMessageSerializer serializer)
         {
@@ -33,7 +36,7 @@ namespace Grapevine.Core
             {
                 _topics.Add(topic);
                 if (_connection != null)
-                    _socket.Subscribe(topic, Encoding.Unicode);
+                    _addTopicHandler(topic, Encoding.Unicode);
             }
         }
 
@@ -43,71 +46,57 @@ namespace Grapevine.Core
             {
                 _topics.Remove(topic);
                 if (_connection != null)
-                    _socket.Unsubscribe(topic, Encoding.Unicode);
+                    _removeTopicHandler(topic, Encoding.Unicode);
             }
         }
 
-        public IDisposable Connect()
+        public IObservable<object> Receive()
         {
-            _socket = _context.Socket(SocketType.SUB);
-            _socket.Connect(_address);
 
-            foreach (var topic in _topics)
-                _socket.Subscribe(topic, Encoding.Unicode);
+            _pipe = _pipe ?? Observable.Defer(() => Observable.Create<object>(o =>
+                    {
+                        var cancel = new CancellationDisposable();
 
-            var cancellationTokenSource = new CancellationTokenSource();
+                        Scheduler.NewThread.Schedule(() =>
+                        {
+                            Socket socket = _context.Socket(SocketType.SUB);
 
-            var task = Task.Factory.StartNew
-            (
-                () =>
-                {
-                    var pollItems = new PollItem[1];
-                    pollItems[0] = _socket.CreatePollItem(IOMultiPlex.POLLIN);
-                    pollItems[0].PollInHandler += Dispatch;
+                            _addTopicHandler = (t, e) => socket.Subscribe(t, e);
+                            _removeTopicHandler = (t, e) => socket.Unsubscribe(t, e);
+                            
+                            socket.Connect(_address);
 
-                    while (!cancellationTokenSource.IsCancellationRequested)
-                        _context.Poll(pollItems, 1000000);
+                            foreach (var topic in _topics)
+                                socket.Subscribe(topic, Encoding.Unicode);
 
-                    pollItems[0].PollInHandler -= Dispatch;
-                },
-                TaskCreationOptions.LongRunning
-            );
+                            var pollItems = new PollItem[1];
+                            pollItems[0] = socket.CreatePollItem(IOMultiPlex.POLLIN);
 
-            if (_connection != null)
-                _connection.Dispose();
+                            ZMQ.PollHandler act = (s, r) => Dispatch(o, s, r);
 
-            _connection = Disposable.Create
-            (
-                () =>
-                {
-                    _connection = null;
+                            pollItems[0].PollInHandler += act;
 
-                    foreach (var topic in _topics)
-                        _socket.Unsubscribe(topic, Encoding.Unicode);
+                            while (!cancel.Token.IsCancellationRequested)
+                                _context.Poll(pollItems, 1000000);
 
-                    cancellationTokenSource.Cancel();
-                    task.Wait();
+                            pollItems[0].PollInHandler -= act;
+                            socket.Dispose();
+                            o.OnCompleted();
 
-                    _socket.Dispose();
-                    _socket = null;
-                }
-            );
+                        }
+                        );
 
-            return _connection;
+                        return cancel;
+                    }))
+                    .Publish()
+                    .RefCount();
+
+            return _pipe;
         }
 
-        public IDisposable Subscribe(IObserver<object> observer)
-        {
-            return _messages.Subscribe(observer);
-        }
 
-        public void Dispose()
-        {
-            if (_connection != null)
-                _connection.Dispose();
-        }
 
-        void Dispatch(Socket socket, IOMultiPlex revents)
+        void Dispatch(IObserver<object> destination, Socket socket, IOMultiPlex revents)
         {
             var typeName = socket.Recv(Encoding.Unicode);
             var data = socket.Recv();
@@ -116,7 +105,7 @@ namespace Grapevine.Core
             if (type != null)
             {
                 var message = _serializer.Deserialize(data, type);
-                _messages.OnNext(message);
+                destination.OnNext(message);
             }
         }
     }
