@@ -77,7 +77,7 @@ namespace Grapevine.Core
                             pollItems[0].PollInHandler += act;
 
                             while (!cancel.Token.IsCancellationRequested)
-                                _context.Poll(pollItems, 1000000);
+                                _context.Poll(pollItems, 2000);
 
                             pollItems[0].PollInHandler -= act;
                             socket.Dispose();
