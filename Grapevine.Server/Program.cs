@@ -12,7 +12,7 @@ namespace Grapevine.Server
 
             using (var context = new Context())
             {
-                var hub = new Forwarder(context, "tcp://*:5559", "tcp://*:5560");
+                var hub = new Forwarder(context, "tcp://*:18901", "tcp://*:18902");
 
                 Console.WriteLine("Starting server...");
                 hub.Start();

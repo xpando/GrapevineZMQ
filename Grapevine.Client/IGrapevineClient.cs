@@ -49,7 +49,7 @@ namespace Grapevine.Client
         /// using MaryKay.Grapevine.Extensions to make calling Subscribe
         /// on the observable much easier.
         /// </summary>
-        IObservable<MessageType> Receive<MessageType>(Expression<Func<MessageType,bool>> filter);
+        IObservable<MessageType> Receive<MessageType>(Func<MessageType,bool> filter);
     }
 
     public sealed class GrapevineClient : IGrapevineClient, IDisposable
@@ -79,9 +79,9 @@ namespace Grapevine.Client
             return _receiver.OfType<MessageType>();
         }
 
-        public IObservable<MessageType> Receive<MessageType>(Expression<Func<MessageType,bool>> filter)
+        public IObservable<MessageType> Receive<MessageType>(Func<MessageType,bool> filter)
         {
-            return Receive<MessageType>().Where(filter.Compile());
+            return Receive<MessageType>().Where(filter);
         }
 
         public void Dispose()

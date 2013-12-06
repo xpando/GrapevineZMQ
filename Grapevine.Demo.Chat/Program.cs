@@ -31,7 +31,7 @@ namespace Grapevine.Demo.Chat
             Console.Write("Enter room name: ");
             var room = Console.ReadLine();
 
-            var client = new GrapevineClient("tcp://localhost:5560", "tcp://localhost:5559") as IGrapevineClient;
+            var client = new GrapevineClient("tcp://localhost:18902", "tcp://localhost:18901") as IGrapevineClient;
 
             Console.WriteLine("Connecting to chat server...");
             
