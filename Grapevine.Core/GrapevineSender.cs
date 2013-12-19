@@ -1,38 +1,46 @@
 ﻿using System;
 using System.Text;
-using ZMQ;
+using ZeroMQ;
 
 namespace Grapevine.Core
 {
     public class GrapevineSender : IDisposable
     {
         IMessageSerializer _serializer;
-        Context _context;
-        Socket _socket;
+        ZmqContext _context;
+        ZmqSocket _pubSocket;
 
-        public GrapevineSender(Context context, string address, IMessageSerializer serializer)
+        public GrapevineSender(ZmqContext context, string subAddress, IMessageSerializer serializer)
         {
             _serializer = serializer;
-            _context = context;
-            _socket = _context.Socket(SocketType.PUSH);
-            _socket.Connect(address);
+            _context    = context;
+            _pubSocket  = _context.CreateSocket(SocketType.PUB);
+
+            _pubSocket.Connect(subAddress);
         }
 
-        public void Send(object message)
+        public void Send(object message, string topic = null)
         {
             var typeName = MessageTypeRegistry.GetTypeName(message.GetType());
-            var data = _serializer.Serialize(message);
+            var data     = _serializer.Serialize(message);
 
-            _socket.SendMore(typeName, Encoding.Unicode);
-            _socket.Send(data);
+            if (topic == null)
+                topic = typeName;
+
+            var msg = new ZmqMessage();
+            msg.Append(new Frame(ZmqContext.DefaultEncoding.GetBytes(topic)));
+            msg.Append(new Frame(ZmqContext.DefaultEncoding.GetBytes(typeName)));
+            msg.Append(new Frame(data));
+
+            _pubSocket.SendMessage(msg);
         }
 
         public void Dispose()
         {
-            if (_socket != null)
-                _socket.Dispose();
+            if (_pubSocket != null)
+                _pubSocket.Dispose();
 
-            _socket = null;
+            _pubSocket = null;
         }
     }
 }

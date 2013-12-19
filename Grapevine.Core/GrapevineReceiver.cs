@@ -5,7 +5,7 @@ using System.Reactive.Subjects;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
-using ZMQ;
+using ZeroMQ;
 
 namespace Grapevine.Core
 {
@@ -13,16 +13,16 @@ namespace Grapevine.Core
     {
         HashSet<string> _topics = new HashSet<string>();
         Subject<object> _messages = new Subject<object>();
-        Context _context;
-        string _address;
+        ZmqContext _context;
+        string _pubAddress;
         IMessageSerializer _serializer;
-        Socket _socket;
+        ZmqSocket _socket;
         IDisposable _connection;
 
-        public GrapevineReceiver(Context context, string address, IMessageSerializer serializer)
+        public GrapevineReceiver(ZmqContext context, string pubAddress, IMessageSerializer serializer)
         {
-            _context = context;
-            _address = address;
+            _context    = context;
+            _pubAddress = pubAddress;
             _serializer = serializer;
         }
 
@@ -32,7 +32,7 @@ namespace Grapevine.Core
             {
                 _topics.Add(topic);
                 if (_connection != null)
-                    _socket.Subscribe(topic, Encoding.Unicode);
+                    _socket.Subscribe(ZmqContext.DefaultEncoding.GetBytes(topic));
             }
         }
 
@@ -42,17 +42,17 @@ namespace Grapevine.Core
             {
                 _topics.Remove(topic);
                 if (_connection != null)
-                    _socket.Unsubscribe(topic, Encoding.Unicode);
+                    _socket.Unsubscribe(ZmqContext.DefaultEncoding.GetBytes(topic));
             }
         }
 
         public IDisposable Connect()
         {
-            _socket = _context.Socket(SocketType.SUB);
-            _socket.Connect(_address);
+            _socket = _context.CreateSocket(SocketType.SUB);
+            _socket.Connect(_pubAddress);
 
             foreach (var topic in _topics)
-                _socket.Subscribe(topic, Encoding.Unicode);
+                _socket.Subscribe(ZmqContext.DefaultEncoding.GetBytes(topic));
 
             var cancellationTokenSource = new CancellationTokenSource();
 
@@ -60,14 +60,13 @@ namespace Grapevine.Core
             (
                 () =>
                 {
-                    var pollItems = new PollItem[1];
-                    pollItems[0] = _socket.CreatePollItem(IOMultiPlex.POLLIN);
-                    pollItems[0].PollInHandler += Dispatch;
+                    _socket.ReceiveReady += Dispatch;
 
+                    var poller = new Poller(new[] { _socket });
                     while (!cancellationTokenSource.IsCancellationRequested)
-                        _context.Poll(pollItems, 1000000);
+                        poller.Poll(TimeSpan.FromSeconds(1));
 
-                    pollItems[0].PollInHandler -= Dispatch;
+                    _socket.ReceiveReady -= Dispatch;
                 },
                 TaskCreationOptions.LongRunning
             );
@@ -82,7 +81,7 @@ namespace Grapevine.Core
                     _connection = null;
 
                     foreach (var topic in _topics)
-                        _socket.Unsubscribe(topic, Encoding.Unicode);
+                        _socket.Unsubscribe(ZmqContext.DefaultEncoding.GetBytes(topic));
 
                     cancellationTokenSource.Cancel();
                     task.Wait();
@@ -106,10 +105,11 @@ namespace Grapevine.Core
                 _connection.Dispose();
         }
 
-        void Dispatch(Socket socket, IOMultiPlex revents)
+        void Dispatch(object sender, SocketEventArgs e)
         {
-            var typeName = socket.Recv(Encoding.Unicode);
-            var data = socket.Recv();
+            var msg      = e.Socket.ReceiveMessage();
+            var typeName = ZmqContext.DefaultEncoding.GetString(msg[1].Buffer);
+            var data     = msg[2].Buffer;
 
             var type = MessageTypeRegistry.Resolve(typeName);
             if (type != null)

@@ -1,4 +1,5 @@
 ﻿using System;
+using System.Reactive.Linq;
 using System.Runtime.Serialization;
 using Grapevine.Client;
 
@@ -21,8 +22,6 @@ namespace Grapevine.Demo.Chat
     {
         static void Main(string[] args)
         {
-            //MessageTypeRegistry.Register<ChatRoomMessage>();
-
             Console.Write("Enter user name: ");
             var userName = Console.ReadLine();
             if (string.IsNullOrWhiteSpace(userName))
@@ -34,14 +33,10 @@ namespace Grapevine.Demo.Chat
             var client = new GrapevineClient("tcp://localhost:18902", "tcp://localhost:18901") as IGrapevineClient;
 
             Console.WriteLine("Connecting to chat server...");
-            
-            client
-                .Receive<ChatRoomMessage>
-                (
-                    message => 
-                        message.From != userName && 
-                        string.Equals(message.Room, room, StringComparison.CurrentCultureIgnoreCase)
-                )
+
+            var topic = string.Format("chat:{0}", room.ToLower());
+            client.Receive<ChatRoomMessage>(topic)
+                .Where(m => m.From != userName)
                 .Subscribe
                 (
                     m => 
@@ -58,7 +53,7 @@ namespace Grapevine.Demo.Chat
                     done = true;
 
                 if (!done)
-                    client.Send(new ChatRoomMessage { Room = room, From = userName, Message = input });
+                    client.Send(new ChatRoomMessage { Room = room, From = userName, Message = input }, topic);
             };
         }
     }

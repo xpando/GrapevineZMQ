@@ -1,16 +1,7 @@
 ﻿using System;
-using System.Collections.Concurrent;
-using System.Collections.Generic;
-using System.IO;
-using System.Linq.Expressions;
-using System.Reactive.Disposables;
 using System.Reactive.Linq;
-using System.Reactive.Subjects;
-using System.Text;
-using System.Threading;
-using System.Threading.Tasks;
 using Grapevine.Core;
-using ZMQ;
+using ZeroMQ;
 
 namespace Grapevine.Client
 {
@@ -22,7 +13,7 @@ namespace Grapevine.Client
         /// <summary>
         /// Publishes a message to the Grapevine server.
         /// </summary>
-        void Send<MessageType>(MessageType message);
+        void Send<MessageType>(MessageType message, string topic = null);
 
         /// <summary>
         /// Creates an observable listener for the specified message type. 
@@ -35,7 +26,7 @@ namespace Grapevine.Client
         /// using MaryKay.Grapevine.Extensions to make calling Subscribe
         /// on the observable much easier.
         /// </summary>
-        IObservable<MessageType> Receive<MessageType>();
+        IObservable<MessageType> Receive<MessageType>(string topic = null);
 
         /// <summary>
         /// Creates an observable listener for the specified message type
@@ -49,39 +40,39 @@ namespace Grapevine.Client
         /// using MaryKay.Grapevine.Extensions to make calling Subscribe
         /// on the observable much easier.
         /// </summary>
-        IObservable<MessageType> Receive<MessageType>(Func<MessageType,bool> filter);
+        IObservable<MessageType> Receive<MessageType>(Func<MessageType, bool> filter, string topic = null);
     }
 
     public sealed class GrapevineClient : IGrapevineClient, IDisposable
     {
         IMessageSerializer _serializer = new ProtobufMessageSerializer();
-        Context _context = new Context();
+        ZmqContext _context = ZmqContext.Create();
         GrapevineSender _sender;
         GrapevineReceiver _receiver;
 
         public GrapevineClient(string pubAddress, string subAddress)
         {
-            _sender = new GrapevineSender(_context, pubAddress, _serializer);
-            _receiver = new GrapevineReceiver(_context, subAddress, _serializer);
+            _sender   = new GrapevineSender(_context, subAddress, _serializer);
+            _receiver = new GrapevineReceiver(_context, pubAddress, _serializer);
             _receiver.Connect();
         }
 
-        void IGrapevineClient.Send<MessageType>(MessageType message)
+        public void Send<MessageType>(MessageType message, string topic = null)
         {
-            _sender.Send(message);
+            _sender.Send(message, topic);
         }
 
-        public IObservable<MessageType> Receive<MessageType>()
+        public IObservable<MessageType> Receive<MessageType>(string topic = null)
         {
             MessageTypeRegistry.Register<MessageType>();
             var typeName = MessageTypeRegistry.GetTypeName(typeof(MessageType));
-            _receiver.AddTopic(typeName);
+            _receiver.AddTopic(topic ?? typeName);
             return _receiver.OfType<MessageType>();
         }
 
-        public IObservable<MessageType> Receive<MessageType>(Func<MessageType,bool> filter)
+        public IObservable<MessageType> Receive<MessageType>(Func<MessageType, bool> filter, string topic = null)
         {
-            return Receive<MessageType>().Where(filter);
+            return Receive<MessageType>(topic).Where(filter);
         }
 
         public void Dispose()
