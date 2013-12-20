@@ -1,4 +1,5 @@
 ﻿using System;
+using System.Linq.Expressions;
 using System.Reactive.Linq;
 using Grapevine.Core;
 using ZeroMQ;
@@ -40,7 +41,7 @@ namespace Grapevine.Client
         /// using MaryKay.Grapevine.Extensions to make calling Subscribe
         /// on the observable much easier.
         /// </summary>
-        IObservable<MessageType> Receive<MessageType>(Func<MessageType, bool> filter, string topic = null);
+        IObservable<MessageType> Receive<MessageType>(Expression<Func<MessageType, bool>> filter, string topic = null);
     }
 
     public sealed class GrapevineClient : IGrapevineClient, IDisposable
@@ -70,9 +71,10 @@ namespace Grapevine.Client
             return _receiver.OfType<MessageType>();
         }
 
-        public IObservable<MessageType> Receive<MessageType>(Func<MessageType, bool> filter, string topic = null)
+        public IObservable<MessageType> Receive<MessageType>(Expression<Func<MessageType, bool>> filter, string topic = null)
         {
-            return Receive<MessageType>(topic).Where(filter);
+            var f = filter.Compile();
+            return Receive<MessageType>(topic).Where(f);
         }
 
         public void Dispose()
