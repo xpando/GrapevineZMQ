@@ -30,31 +30,31 @@ namespace Grapevine.Demo.Chat
             Console.Write("Enter room name: ");
             var room = Console.ReadLine();
 
-            var client = new GrapevineClient("tcp://localhost:18902", "tcp://localhost:18901") as IGrapevineClient;
-
-            Console.WriteLine("Connecting to chat server...");
-
-            var topic = string.Format("chat:{0}", room.ToLower());
-            client.Receive<ChatRoomMessage>(topic)
-                .Where(m => m.From != userName)
-                .Subscribe
-                (
-                    m => 
-                    Console.WriteLine("[{0}] {1}", m.From, m.Message)
-                );
-
-            Console.WriteLine("Connected. Type your chat messages and press enter to send or type quit to exit.");
-
-            bool done = false;
-            while (!done)
+            using (var client = new GrapevineClient("tcp://localhost:18902", "tcp://localhost:18901"))
             {
-                var input = Console.ReadLine();
-                if (string.Equals(input, "quit", StringComparison.CurrentCultureIgnoreCase))
-                    done = true;
+                Console.WriteLine("Connecting to chat server...");
 
-                if (!done)
-                    client.Send(new ChatRoomMessage { Room = room, From = userName, Message = input }, topic);
-            };
+                var topic = string.Format("chat:{0}", room.ToLower());
+                var messages = client.Receive<ChatRoomMessage>(topic)
+                    .Where(m => m.From != userName)
+                    .Subscribe(m => Console.WriteLine("[{0}] {1}", m.From, m.Message));
+
+                Console.WriteLine("Connected. Type your chat messages and press enter to send or type quit to exit.");
+
+                using (messages)
+                {
+                    bool done = false;
+                    while (!done)
+                    {
+                        var input = Console.ReadLine();
+                        if (string.Equals(input, "quit", StringComparison.CurrentCultureIgnoreCase))
+                            done = true;
+
+                        if (!done)
+                            client.Send(new ChatRoomMessage { Room = room, From = userName, Message = input }, topic);
+                    };
+                }
+            }
         }
     }
 }

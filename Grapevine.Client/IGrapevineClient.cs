@@ -1,6 +1,7 @@
 ﻿using System;
 using System.Linq.Expressions;
 using System.Reactive.Linq;
+using System.Reactive.Subjects;
 using Grapevine.Core;
 using ZeroMQ;
 
@@ -47,15 +48,14 @@ namespace Grapevine.Client
     public sealed class GrapevineClient : IGrapevineClient, IDisposable
     {
         IMessageSerializer _serializer = new ProtobufMessageSerializer();
-        ZmqContext _context = ZmqContext.Create();
-        GrapevineSender _sender;
-        GrapevineReceiver _receiver;
+        ZmqContext         _context = ZmqContext.Create();
+        GrapevineSender    _sender;
+        GrapevineReceiver  _receiver;
 
         public GrapevineClient(string pubAddress, string subAddress)
         {
             _sender   = new GrapevineSender(_context, subAddress, _serializer);
             _receiver = new GrapevineReceiver(_context, pubAddress, _serializer);
-            _receiver.Connect();
         }
 
         public void Send<MessageType>(MessageType message, string topic = null)
@@ -68,7 +68,7 @@ namespace Grapevine.Client
             MessageTypeRegistry.Register<MessageType>();
             var typeName = MessageTypeRegistry.GetTypeName(typeof(MessageType));
             _receiver.AddTopic(topic ?? typeName);
-            return _receiver.OfType<MessageType>();
+            return _receiver.Messages.OfType<MessageType>();
         }
 
         public IObservable<MessageType> Receive<MessageType>(Expression<Func<MessageType, bool>> filter, string topic = null)

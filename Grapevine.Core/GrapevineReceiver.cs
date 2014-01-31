@@ -1,121 +1,90 @@
 ﻿using System;
-using System.Collections.Generic;
+using System.Reactive.Concurrency;
 using System.Reactive.Disposables;
-using System.Reactive.Subjects;
-using System.Threading;
-using System.Threading.Tasks;
+using System.Reactive.Linq;
 using ZeroMQ;
 
 namespace Grapevine.Core
 {
-    public sealed class GrapevineReceiver : IConnectableObservable<object>, IDisposable
+    public class GrapevineReceiver : IDisposable
     {
-        HashSet<string> _topics = new HashSet<string>();
-        Subject<object> _messages = new Subject<object>();
-        ZmqContext _context;
-        string _pubAddress;
-        IMessageSerializer _serializer;
-        ZmqSocket _socket;
-        IDisposable _connection;
+        readonly EventLoopScheduler  _scheduler;
+        readonly IObservable<object> _messages;
+        readonly ZmqSocket           _socket = null;
+        readonly TimeSpan            _pollInterval = TimeSpan.FromMilliseconds(10);
 
-        public GrapevineReceiver(ZmqContext context, string pubAddress, IMessageSerializer serializer)
+        public GrapevineReceiver(ZmqContext context, string address, IMessageSerializer serializer)
         {
-            _context    = context;
-            _pubAddress = pubAddress;
-            _serializer = serializer;
+            _scheduler = new EventLoopScheduler();
+            _socket    = context.CreateSocket(SocketType.SUB);
+            _messages  = ListenForMessages(context, address, serializer);
         }
+
+        IObservable<object> ListenForMessages(ZmqContext context, string address, IMessageSerializer serializer)
+        {
+            return 
+                Observable.Create<object>
+                (
+                    o =>
+                    {
+                        _socket.Connect(address);
+
+                        var poller = _scheduler.SchedulePeriodic
+                        (
+                            _pollInterval,
+                            () =>
+                            {
+                                try
+                                {
+                                    var msg = _socket.ReceiveMessage(TimeSpan.Zero);
+                                    while (msg != null && msg.FrameCount == 3)
+                                    {
+                                        var typeName = ZmqContext.DefaultEncoding.GetString(msg[1].Buffer);
+                                        var type     = MessageTypeRegistry.Resolve(typeName);
+                                        var data     = msg[2].Buffer;
+
+                                        if (type != null)
+                                        {
+                                            var poco = serializer.Deserialize(data, type);
+                                            o.OnNext(poco);
+                                        }
+
+                                        msg = _socket.ReceiveMessage(TimeSpan.Zero);
+                                    }
+                                }
+                                catch (Exception ex)
+                                {
+                                    o.OnError(ex);
+                                }
+                            }
+                        );
+
+                        return new CompositeDisposable(poller, Disposable.Create(() => _socket.Disconnect(address)));
+                    }
+                )
+                .SubscribeOn(_scheduler)
+                .ObserveOn(_scheduler)
+                .Publish()
+                .RefCount();
+        }
+
+        public IObservable<object> Messages { get { return _messages; } }
 
         public void AddTopic(string topic)
         {
-            if (!_topics.Contains(topic))
-            {
-                _topics.Add(topic);
-                if (_connection != null)
-                    _socket.Subscribe(ZmqContext.DefaultEncoding.GetBytes(topic));
-            }
+            _scheduler.Schedule(() => _socket.Subscribe(ZmqContext.DefaultEncoding.GetBytes(topic)));
         }
 
         public void RemoveTopic(string topic)
         {
-            if (_topics.Contains(topic))
-            {
-                _topics.Remove(topic);
-                if (_connection != null)
-                    _socket.Unsubscribe(ZmqContext.DefaultEncoding.GetBytes(topic));
-            }
-        }
-
-        public IDisposable Connect()
-        {
-            _socket = _context.CreateSocket(SocketType.SUB);
-            _socket.Connect(_pubAddress);
-
-            foreach (var topic in _topics)
-                _socket.Subscribe(ZmqContext.DefaultEncoding.GetBytes(topic));
-
-            var cancellationTokenSource = new CancellationTokenSource();
-
-            var task = Task.Factory.StartNew
-            (
-                () =>
-                {
-                    _socket.ReceiveReady += Dispatch;
-
-                    var poller = new Poller(new[] { _socket });
-                    while (!cancellationTokenSource.IsCancellationRequested)
-                        poller.Poll(TimeSpan.FromSeconds(1));
-
-                    _socket.ReceiveReady -= Dispatch;
-                },
-                TaskCreationOptions.LongRunning
-            );
-
-            if (_connection != null)
-                _connection.Dispose();
-
-            _connection = Disposable.Create
-            (
-                () =>
-                {
-                    _connection = null;
-
-                    foreach (var topic in _topics)
-                        _socket.Unsubscribe(ZmqContext.DefaultEncoding.GetBytes(topic));
-
-                    cancellationTokenSource.Cancel();
-                    task.Wait();
-
-                    _socket.Dispose();
-                    _socket = null;
-                }
-            );
-
-            return _connection;
-        }
-
-        public IDisposable Subscribe(IObserver<object> observer)
-        {
-            return _messages.Subscribe(observer);
+            _scheduler.Schedule(() => _socket.Unsubscribe(ZmqContext.DefaultEncoding.GetBytes(topic)));
         }
 
         public void Dispose()
         {
-            if (_connection != null)
-                _connection.Dispose();
-        }
-
-        void Dispatch(object sender, SocketEventArgs e)
-        {
-            var msg      = e.Socket.ReceiveMessage();
-            var typeName = ZmqContext.DefaultEncoding.GetString(msg[1].Buffer);
-            var data     = msg[2].Buffer;
-
-            var type = MessageTypeRegistry.Resolve(typeName);
-            if (type != null)
-            {
-                var message = _serializer.Deserialize(data, type);
-                _messages.OnNext(message);
-            }
+            _scheduler.Dispose();
+            if (_socket != null)
+                _socket.Dispose();
         }
     }
 }

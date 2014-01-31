@@ -1,28 +1,38 @@
 ﻿using System;
-using System.Text;
+using System.Reactive.Concurrency;
+using System.Reactive.Linq;
+using System.Reactive.Subjects;
 using ZeroMQ;
 
 namespace Grapevine.Core
 {
     public class GrapevineSender : IDisposable
     {
-        IMessageSerializer _serializer;
-        ZmqContext _context;
-        ZmqSocket _pubSocket;
+        IMessageSerializer  _serializer;
+        EventLoopScheduler  _scheduler;
+        ZmqSocket           _socket;
+        Subject<ZmqMessage> _messages;
+        IDisposable         _messageDispatcher;
 
-        public GrapevineSender(ZmqContext context, string subAddress, IMessageSerializer serializer)
+        public GrapevineSender(ZmqContext context, string address, IMessageSerializer serializer)
         {
             _serializer = serializer;
-            _context    = context;
-            _pubSocket  = _context.CreateSocket(SocketType.PUB);
+            _scheduler = new EventLoopScheduler();
 
-            _pubSocket.Connect(subAddress);
+            _socket = context.CreateSocket(SocketType.PUB);
+            _socket.Connect(address);
+
+            _messages = new Subject<ZmqMessage>();
+            _messageDispatcher = _messages
+                .SubscribeOn(_scheduler)
+                .ObserveOn(_scheduler)
+                .Subscribe(msg => _socket.SendMessage(msg));
         }
 
         public void Send(object message, string topic = null)
         {
             var typeName = MessageTypeRegistry.GetTypeName(message.GetType());
-            var data     = _serializer.Serialize(message);
+            var data = _serializer.Serialize(message);
 
             if (topic == null)
                 topic = typeName;
@@ -32,15 +42,15 @@ namespace Grapevine.Core
             msg.Append(new Frame(ZmqContext.DefaultEncoding.GetBytes(typeName)));
             msg.Append(new Frame(data));
 
-            _pubSocket.SendMessage(msg);
+            _messages.OnNext(msg);
         }
 
         public void Dispose()
         {
-            if (_pubSocket != null)
-                _pubSocket.Dispose();
-
-            _pubSocket = null;
+            _messageDispatcher.Dispose();
+            _messages.Dispose();
+            _scheduler.Dispose();
+            _socket.Dispose();
         }
     }
 }
