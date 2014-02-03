@@ -1,7 +1,5 @@
 ﻿using System;
-using System.Linq.Expressions;
 using System.Reactive.Linq;
-using System.Reactive.Subjects;
 using Grapevine.Core;
 using ZeroMQ;
 
@@ -22,11 +20,7 @@ namespace Grapevine.Client
         /// No message filtering is performed on the server.
         /// 
         /// NOTE: call Subscribe on the returned observable to receive messages
-        /// and dont forget to dispose your subscription when you are done.
-        /// 
-        /// If you are not using the Rx framework then be sure to add a 
-        /// using MaryKay.Grapevine.Extensions to make calling Subscribe
-        /// on the observable much easier.
+        /// and dont forget to dispose your subscription.
         /// </summary>
         IObservable<MessageType> Receive<MessageType>(string topic = null);
 
@@ -42,7 +36,7 @@ namespace Grapevine.Client
         /// using MaryKay.Grapevine.Extensions to make calling Subscribe
         /// on the observable much easier.
         /// </summary>
-        IObservable<MessageType> Receive<MessageType>(Expression<Func<MessageType, bool>> filter, string topic = null);
+        IObservable<MessageType> Receive<MessageType>(Func<MessageType, bool> filter, string topic = null);
     }
 
     public sealed class GrapevineClient : IGrapevineClient, IDisposable
@@ -60,21 +54,27 @@ namespace Grapevine.Client
 
         public void Send<MessageType>(MessageType message, string topic = null)
         {
+            if (!MessageTypeRegistry.IsRegistered<MessageType>())
+                MessageTypeRegistry.Register<MessageType>();
+
             _sender.Send(message, topic);
         }
 
         public IObservable<MessageType> Receive<MessageType>(string topic = null)
         {
-            MessageTypeRegistry.Register<MessageType>();
+            if (!MessageTypeRegistry.IsRegistered<MessageType>())
+                MessageTypeRegistry.Register<MessageType>();
+
             var typeName = MessageTypeRegistry.GetTypeName(typeof(MessageType));
+
             _receiver.AddTopic(topic ?? typeName);
+
             return _receiver.Messages.OfType<MessageType>();
         }
 
-        public IObservable<MessageType> Receive<MessageType>(Expression<Func<MessageType, bool>> filter, string topic = null)
+        public IObservable<MessageType> Receive<MessageType>(Func<MessageType, bool> filter, string topic = null)
         {
-            var f = filter.Compile();
-            return Receive<MessageType>(topic).Where(f);
+            return Receive<MessageType>(topic).Where(filter);
         }
 
         public void Dispose()

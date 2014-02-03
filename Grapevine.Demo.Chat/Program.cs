@@ -5,7 +5,7 @@ using Grapevine.Client;
 
 namespace Grapevine.Demo.Chat
 {
-    [DataContract] //(Namespace="http://mkcorp.com/chat", Name="message")]
+    [DataContract(Namespace="http://mkcorp.com/chat", Name="message")]
     public class ChatRoomMessage
     {
         [DataMember(Order = 1)]

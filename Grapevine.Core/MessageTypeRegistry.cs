@@ -1,9 +1,7 @@
 ﻿using System;
 using System.Collections.Concurrent;
-using System.Collections.Generic;
 using System.Linq;
 using System.Runtime.Serialization;
-using System.Text;
 
 namespace Grapevine.Core
 {
@@ -12,24 +10,19 @@ namespace Grapevine.Core
         static readonly ConcurrentDictionary<string, Type> _messageTypes = new ConcurrentDictionary<string, Type>();
         static ConcurrentDictionary<Type, string> _typeNameCache = new ConcurrentDictionary<Type, string>();
 
+        public static bool IsRegistered<MessageType>()
+        {
+            return IsRegistered(typeof(MessageType));
+        }
+
+        public static bool IsRegistered(Type messageType)
+        {
+            return _typeNameCache.ContainsKey(messageType);
+        }
+
         public static string GetTypeName(Type messageType)
         {
-            return _typeNameCache.GetOrAdd
-            (
-                messageType,
-                _ =>
-                {
-                    var dataContract = messageType.GetCustomAttributes(typeof(DataContractAttribute), false).FirstOrDefault() as DataContractAttribute;
-                    if (dataContract == null)
-                        throw new InvalidOperationException(string.Format("Missing [DataContract] attribute on message type '{0}'.", messageType.FullName));
-
-                    var name = dataContract.Name;
-                    if (string.IsNullOrWhiteSpace(name))
-                        name = messageType.FullName;
-
-                    return name;
-                }
-            );
+            return _typeNameCache[messageType];
         }
 
         public static Type Resolve(string typeName)
@@ -40,19 +33,23 @@ namespace Grapevine.Core
             return null;
         }
 
-        public static void Register<T>()
+        public static void Register<MessageType>()
         {
-            var messageType = typeof(T);
+            Register(typeof(MessageType));
+        }
 
+        public static void Register(Type messageType)
+        {
             var dataContract = messageType.GetCustomAttributes(typeof(DataContractAttribute), false).FirstOrDefault() as DataContractAttribute;
             if (dataContract == null)
                 throw new InvalidOperationException(string.Format("Missing [DataContract] attribute on message type '{0}'.", messageType.FullName));
 
-            var name = dataContract.Name;
-            if (string.IsNullOrWhiteSpace(name))
-                name = messageType.FullName;
-
-            _messageTypes.TryAdd(name, messageType);
+            var ns = dataContract.Namespace ?? "http://tempuri.org/";
+            if (!ns.EndsWith("/")) ns = ns + "/";
+            var name = ns + dataContract.Name ?? messageType.FullName;
+            _messageTypes.GetOrAdd(name, messageType);
+            _typeNameCache.GetOrAdd(messageType, name);
         }
+
     }
 }
