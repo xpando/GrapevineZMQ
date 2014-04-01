@@ -15,7 +15,7 @@ namespace Grapevine.Core
         {
             var settings = new JsonSerializerSettings
             {
-                TypeNameHandling = TypeNameHandling.None                
+                TypeNameHandling = TypeNameHandling.None
             };
 
             _serializer = JsonSerializer.Create(settings);
@@ -26,8 +26,8 @@ namespace Grapevine.Core
             using (var ms = new MemoryStream())
             using (var sw = new StreamWriter(ms))
             {
-                _serializer.Serialize(sw, message);
-                ms.Flush();
+                _serializer.Serialize(sw, message, message.GetType());
+                sw.Flush();
                 return ms.ToArray();
             }
         }
