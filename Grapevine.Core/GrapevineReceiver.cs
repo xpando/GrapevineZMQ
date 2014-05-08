@@ -6,7 +6,7 @@ using ZeroMQ;
 
 namespace Grapevine.Core
 {
-    public class GrapevineReceiver : IDisposable
+    public sealed class GrapevineReceiver : IDisposable
     {
         readonly EventLoopScheduler  _scheduler;
         readonly IObservable<object> _messages;

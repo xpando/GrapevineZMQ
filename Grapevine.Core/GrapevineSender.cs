@@ -6,7 +6,7 @@ using ZeroMQ;
 
 namespace Grapevine.Core
 {
-    public class GrapevineSender : IDisposable
+    public sealed class GrapevineSender : IDisposable
     {
         IMessageSerializer  _serializer;
         EventLoopScheduler  _scheduler;

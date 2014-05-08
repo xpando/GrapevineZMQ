@@ -23,7 +23,7 @@ namespace Grapevine.Core
 
         public byte[] Serialize(object message)
         {
-            using (var ms = new MemoryStream())
+            var ms = new MemoryStream();
             using (var sw = new StreamWriter(ms))
             {
                 _serializer.Serialize(sw, message, message.GetType());
@@ -34,7 +34,7 @@ namespace Grapevine.Core
 
         public object Deserialize(byte[] buffer, Type type)
         {
-            using (var ms = new MemoryStream(buffer))
+            var ms = new MemoryStream(buffer);
             using (var sr = new StreamReader(ms))
             {
                 return _serializer.Deserialize(sr, type);

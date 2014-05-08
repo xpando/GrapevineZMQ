@@ -1,4 +1,5 @@
-﻿using System.Configuration;
+﻿using System;
+using System.Configuration;
 using NLog;
 using Topshelf;
 using ZeroMQ;
@@ -6,7 +7,7 @@ using ZeroMQ.Devices;
 
 namespace Grapevine.Server
 {
-    class ForwarderService
+    sealed class ForwarderService : IDisposable
     {
         static Logger _logger = LogManager.GetCurrentClassLogger();
 
@@ -51,6 +52,15 @@ namespace Grapevine.Server
             _logger.Info("Disposing 0mq context.");
             _context.Dispose();
             _logger.Info("done.");
+        }
+
+        public void Dispose()
+        {
+            if (_forwarder != null)
+            {
+                _forwarder.Dispose();
+                _forwarder = null;
+            }
         }
     }
 
